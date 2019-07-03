@@ -1,0 +1,115 @@
+# Java Maven CircleCI 2.0 configuration file
+#
+# Check https://circleci.com/docs/2.0/language-java/ for more details
+#
+version: 2
+jobs:
+  build:
+    docker:
+      # specify the version you desire here
+      - image: circleci/openjdk:8-jdk
+
+      # Specify service dependencies here if necessary
+      # CircleCI maintains a library of pre-built images
+      # documented at https://circleci.com/docs/2.0/circleci-images/
+      # - image: circleci/postgres:9.4
+
+    working_directory: ~/repo
+
+    environment:
+      # Customize the JVM maximum heap limit
+      MAVEN_OPTS: -Xmx3200m
+
+    steps:
+      - checkout
+
+      # Run a step to setup an environment variable.
+      - run: 
+          name: "Setup custom environment variables"
+          command: |
+            echo 'export MY_ENV_VAR="A Spring Boot REST Service"' >> $BASH_ENV # Redirect MY_ENV_VAR into $BASH_ENV
+            echo 'export MY_ENV_APP="a-springboot-service"' >> $BASH_ENV
+            echo 'export MY_ENV_APP_CTNR="a-springboot-service-container"' >> $BASH_ENV
+
+      # Download and cache dependencies
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum "pom.xml" }}
+            # fallback to using the latest cache if no exact match is found
+            - v1-dependencies-
+
+      - run: mvn dependency:go-offline
+
+      - save_cache:
+          paths:
+            - ~/.m2
+          key: v1-dependencies-{{ checksum "pom.xml" }}
+
+      # run tests!
+      # - run: mvn integration-test
+
+      - run:
+          name: "Display custom environment variables"
+          command: |
+            echo ${MY_ENV_VAR}
+
+      # - run: java -version
+      - run: mvn clean package -DskipTests
+
+      # run deploy!
+      - add_ssh_keys
+
+      # - run:
+      #     name: Make remote server a known host
+      #     command: ssh-keyscan dlei.ca >> ~/.ssh/known_hosts
+
+      - deploy:
+          name: Deploy Over SSH
+          command: |
+            # copy jar to prod server
+            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -r ./target/${MY_ENV_APP}-0.0.1-SNAPSHOT.jar root@dlei.ca:/root/_daniel/app.jar
+            # start spring boot
+            # run as an app: java -jar ~/_daniel/app.jar > /var/log/${MY_ENV_APP}.log
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -l root dlei.ca \
+              "kill \$(lsof -t -i:8080); \
+              sudo ln -s ~/_daniel/app.jar /etc/init.d/a-svc; \
+              /etc/init.d/a-svc start; \
+              "
+            # process ID in /var/run/a-svc/a-svc.pid
+            # output cat /var/log/a-svc.log
+
+      - deploy:
+          name: Deploy Docker Over SSH
+          command: |
+            # create directories
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null dlei.ca -l root \
+              mkdir -p /root/_daniel/${MY_ENV_APP}/target
+
+            # copy jar to prod server
+            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -r ./target/${MY_ENV_APP}-0.0.1-SNAPSHOT.jar root@dlei.ca:/root/_daniel/${MY_ENV_APP}/target
+            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -r ./Dockerfile root@dlei.ca:/root/_daniel/${MY_ENV_APP}
+
+            # docker process
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null dlei.ca -l root <<EOF
+              cd ~/_daniel/${MY_ENV_APP} 
+              docker stop ${MY_ENV_APP_CTNR} 
+              docker rm ${MY_ENV_APP_CTNR}
+              docker rmi ${MY_ENV_APP} 
+              docker build -t ${MY_ENV_APP} .
+              docker run -p 800:8080 --name ${MY_ENV_APP_CTNR} -d ${MY_ENV_APP} 
+            EOF
+            # !!!
+
+      - run:
+          name: Configure and restart nginx
+          command: |
+            # copy nginx conf to prod server
+            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -r ./.circleci/nginx.conf root@dlei.ca:/etc/nginx/sites-available/api.dlei.ca
+            # update and restart nginx on prod server
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null dlei.ca -l root \
+              'sudo ln -sf /etc/nginx/sites-available/api.dlei.ca /etc/nginx/sites-enabled/; \
+              sudo service nginx restart'

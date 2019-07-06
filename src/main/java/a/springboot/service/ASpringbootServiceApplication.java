@@ -4,6 +4,7 @@ import java.util.Arrays;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
@@ -35,8 +36,11 @@ public class ASpringbootServiceApplication {
 		return new RestTemplate();
 	}
 	
+	@Value("${app.title:TODO: APP TITLEE}")
+	private String appStr;
+	
 	@RequestMapping(value = "/")
 	public String hello() {
-		return "Hello A Spring Boot Service";
+		return "Hello " + appStr;
 	}
 }

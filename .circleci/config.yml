@@ -9,11 +9,6 @@ jobs:
       # specify the version you desire here
       - image: circleci/openjdk:8-jdk
 
-      # Specify service dependencies here if necessary
-      # CircleCI maintains a library of pre-built images
-      # documented at https://circleci.com/docs/2.0/circleci-images/
-      # - image: circleci/postgres:9.4
-
     working_directory: ~/repo
 
     environment:
@@ -61,21 +56,20 @@ jobs:
 
       # - run:
       #     name: Make remote server a known host
-      #     command: ssh-keyscan dlei.ca >> ~/.ssh/known_hosts
+      #     command: ssh-keyscan ${REMOTE_SERVER} >> ~/.ssh/known_hosts
 
       - deploy:
           name: Deploy Over SSH
           command: |
             # copy jar to prod server
             scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              -r ./target/${MY_ENV_APP}-0.0.1-SNAPSHOT.jar root@dlei.ca:/root/_daniel/app.jar
+              -r ./target/${MY_ENV_APP}-0.0.1-SNAPSHOT.jar root@${REMOTE_SERVER}:/root/_daniel/app.jar
             # start spring boot
             # run as an app: java -jar ~/_daniel/app.jar > /var/log/${MY_ENV_APP}.log
-            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -l root dlei.ca \
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -l root ${REMOTE_SERVER} \
               "kill \$(lsof -t -i:8080); \
-              sudo ln -s ~/_daniel/app.jar /etc/init.d/a-svc; \
-              /etc/init.d/a-svc start; \
-              "
+              sudo ln -sf ~/_daniel/app.jar /etc/init.d/a-svc; \
+              service a-svc restart"
             # process ID in /var/run/a-svc/a-svc.pid
             # output cat /var/log/a-svc.log
 
@@ -83,17 +77,17 @@ jobs:
           name: Deploy Docker Over SSH
           command: |
             # create directories
-            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null dlei.ca -l root \
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${REMOTE_SERVER} -l root \
               mkdir -p /root/_daniel/${MY_ENV_APP}/target
 
             # copy jar to prod server
             scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              -r ./target/${MY_ENV_APP}-0.0.1-SNAPSHOT.jar root@dlei.ca:/root/_daniel/${MY_ENV_APP}/target
+              -r ./target/${MY_ENV_APP}-0.0.1-SNAPSHOT.jar root@${REMOTE_SERVER}:/root/_daniel/${MY_ENV_APP}/target
             scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              -r ./Dockerfile root@dlei.ca:/root/_daniel/${MY_ENV_APP}
+              -r ./Dockerfile root@${REMOTE_SERVER}:/root/_daniel/${MY_ENV_APP}
 
             # docker process
-            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null dlei.ca -l root <<EOF
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${REMOTE_SERVER} -l root <<EOF
               cd ~/_daniel/${MY_ENV_APP} 
               docker stop ${MY_ENV_APP_CTNR} 
               docker rm ${MY_ENV_APP_CTNR}
@@ -106,10 +100,21 @@ jobs:
       - run:
           name: Configure and restart nginx
           command: |
-            # copy nginx conf to prod server
-            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              -r ./.circleci/nginx.conf root@dlei.ca:/etc/nginx/sites-available/api.dlei.ca
-            # update and restart nginx on prod server
-            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null dlei.ca -l root \
+            # create nginx conf and restart nginx on prod server
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${REMOTE_SERVER} -l root \
+              "echo 'server {
+                listen 80;
+                listen [::]:80;
+
+                server_name ${REMOTE_SERVER};
+
+                location / {
+                  proxy_pass http://localhost:800/;
+                  proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto \$scheme;
+                  proxy_set_header X-Forwarded-Port \$server_port;
+                }
+            }' > /etc/nginx/sites-available/api.dlei.ca"
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${REMOTE_SERVER} -l root \
               'sudo ln -sf /etc/nginx/sites-available/api.dlei.ca /etc/nginx/sites-enabled/; \
               sudo service nginx restart'
